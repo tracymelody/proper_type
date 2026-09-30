@@ -7,7 +7,7 @@ class AIService {
     static let shared = AIService()
     private init() {}
 
-    private let defaultModel = "gemini-3.1-flash-lite"
+    private let defaultModel = "gemini-2.5-flash"
 
     private var apiURL: String {
         "https://generativelanguage.googleapis.com/v1beta/models/\(defaultModel):generateContent"
@@ -35,8 +35,9 @@ class AIService {
                 ]
             ],
             "generationConfig": [
-                "maxOutputTokens": 500,
-                "temperature": 0.3
+                "maxOutputTokens": 2048,
+                "temperature": 0.3,
+                "thinkingConfig": ["thinkingBudget": 0]
             ]
         ]
 
@@ -126,16 +127,9 @@ class SettingsManager {
     
     func getCurrentSystemPrompt() -> String {
         let defaultPrompt = """
-        You are a professional text editor and writing assistant. Your task is to improve the given text by:
-        
-        1. Fixing grammar, spelling, and punctuation errors
-        2. Improving clarity and readability
-        3. Making the language more professional and polished
-        4. Maintaining the original meaning and intent
-        5. Keeping the same tone unless it's clearly inappropriate
-        
-        Please return only the improved text without explanations, quotes, or additional commentary.
-        If the text is already well-written, you may make minor improvements or return it as-is.
+        Fix grammar, spelling and punctuation. Keep the author's meaning, tone and style exactly as-is. \
+        Do not add, remove or rephrase beyond what is needed to correct errors. \
+        Return only the corrected text, nothing else.
         """
         
         return UserDefaults.standard.string(forKey: systemPromptKey) ?? defaultPrompt
