@@ -2,57 +2,60 @@ import Cocoa
 import Foundation
 import Carbon
 
-// Real AI Service that calls OpenAI API
+// AI Service using Gemini API
 class AIService {
     static let shared = AIService()
     private init() {}
-    
-    private let apiURL = "https://api.openai.com/v1/chat/completions"
-    private let defaultModel = "gpt-4o-mini"
-    
+
+    private let defaultModel = "gemini-3.1-flash-lite"
+
+    private var apiURL: String {
+        "https://generativelanguage.googleapis.com/v1beta/models/\(defaultModel):generateContent"
+    }
+
     func improveText(_ text: String, systemPrompt: String, completion: @escaping (String?) -> Void) {
-        // Check if API key is configured
         guard let apiKey = getAPIKey(), !apiKey.isEmpty else {
-            print("❌ OpenAI API key not configured")
+            print("❌ Gemini API key not configured")
             DispatchQueue.main.async {
-                completion("❌ Error: OpenAI API key not set. Please configure your API key first.")
+                completion("❌ Error: Gemini API key not set. Please configure your API key first.")
             }
             return
         }
-        
-        print("🚀 Using OpenAI API with model: \(defaultModel)")
-        print("🔑 API key configured: \(String(apiKey.prefix(10)))...")
+
+        print("🚀 Using Gemini API with model: \(defaultModel)")
         print("📝 Processing text: \(text)")
-        
-        // Prepare the request
-        let messages = [
-            ["role": "system", "content": systemPrompt],
-            ["role": "user", "content": "Please improve this text while maintaining its original meaning: \(text)"]
-        ]
-        
+
         let requestBody: [String: Any] = [
-            "model": defaultModel,
-            "messages": messages,
-            "max_tokens": 500,
-            "temperature": 0.3
+            "system_instruction": [
+                "parts": [["text": systemPrompt]]
+            ],
+            "contents": [
+                [
+                    "parts": [["text": "Please improve this text while maintaining its original meaning: \(text)"]]
+                ]
+            ],
+            "generationConfig": [
+                "maxOutputTokens": 500,
+                "temperature": 0.3
+            ]
         ]
-        
-        guard let url = URL(string: apiURL),
+
+        let urlString = "\(apiURL)?key=\(apiKey)"
+        guard let url = URL(string: urlString),
               let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
             DispatchQueue.main.async {
                 completion("❌ Error: Failed to create API request")
             }
             return
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = jsonData
-        
-        print("📡 Sending request to OpenAI...")
-        
+
+        print("📡 Sending request to Gemini...")
+
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
@@ -60,32 +63,32 @@ class AIService {
                     completion("❌ Network error: \(error.localizedDescription)")
                     return
                 }
-                
+
                 guard let data = data else {
                     print("❌ No data received")
-                    completion("❌ No data received from OpenAI")
+                    completion("❌ No data received from Gemini")
                     return
                 }
-                
+
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        
-                        // Check for API errors
+
                         if let error = json["error"] as? [String: Any],
                            let message = error["message"] as? String {
-                            print("❌ OpenAI API error: \(message)")
-                            completion("❌ OpenAI error: \(message)")
+                            print("❌ Gemini API error: \(message)")
+                            completion("❌ Gemini error: \(message)")
                             return
                         }
-                        
-                        // Extract improved text
-                        if let choices = json["choices"] as? [[String: Any]],
-                           let firstChoice = choices.first,
-                           let message = firstChoice["message"] as? [String: Any],
-                           let content = message["content"] as? String {
-                            
-                            let improvedText = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                            print("✅ Received improved text from OpenAI")
+
+                        if let candidates = json["candidates"] as? [[String: Any]],
+                           let firstCandidate = candidates.first,
+                           let content = firstCandidate["content"] as? [String: Any],
+                           let parts = content["parts"] as? [[String: Any]],
+                           let firstPart = parts.first,
+                           let text = firstPart["text"] as? String {
+
+                            let improvedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            print("✅ Received improved text from Gemini")
                             completion(improvedText)
                         } else {
                             print("❌ Unexpected API response format")
@@ -102,13 +105,15 @@ class AIService {
             }
         }.resume()
     }
-    
+
     func getAPIKey() -> String? {
-        return UserDefaults.standard.string(forKey: "ProperType_OpenAI_API_Key")
+        let stored = UserDefaults.standard.string(forKey: "ProperType_Gemini_API_Key")
+        if let stored = stored, !stored.isEmpty { return stored }
+        return nil
     }
-    
+
     func setAPIKey(_ key: String) {
-        UserDefaults.standard.set(key, forKey: "ProperType_OpenAI_API_Key")
+        UserDefaults.standard.set(key, forKey: "ProperType_Gemini_API_Key")
     }
 }
 
@@ -246,16 +251,12 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
             print("✅ Accessibility permissions granted")
             setupHotkey()
         } else {
-            print("⚠️ Accessibility permissions not granted")
-            
-            // Show the permission request dialog after a short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.promptForPermissions()
-            }
+            print("⚠️ Accessibility permissions not granted - grant in System Settings")
         }
     }
     
     private func promptForPermissions() {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Enable Hotkey Support?"
         alert.informativeText = """
@@ -309,14 +310,35 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     
     private func setupStatusBarItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        
+
         if let button = statusItem?.button {
-            button.title = "PT"
+            if let img = NSImage(systemSymbolName: "text.cursor", accessibilityDescription: "ProperType") {
+                img.isTemplate = true
+                button.image = img
+            } else {
+                button.title = "PT"
+            }
             button.action = #selector(statusBarButtonClicked)
             button.target = self
         }
-        
+
         updateMenu()
+    }
+
+    private func setStatusIcon(_ symbolName: String) {
+        guard let button = statusItem?.button else { return }
+        if let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: "ProperType") {
+            img.isTemplate = true
+            button.image = img
+            button.title = ""
+        }
+    }
+
+    private func flashStatus(_ symbolName: String, duration: TimeInterval = 2.0) {
+        setStatusIcon(symbolName)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            self?.setStatusIcon("text.cursor")
+        }
     }
     
     private func setupHotkey() {
@@ -329,6 +351,7 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     
     private func updateMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         
         // Main actions
         let improveClipboardItem = NSMenuItem(title: "Improve Clipboard Text", action: #selector(improveClipboardText), keyEquivalent: "")
@@ -365,7 +388,7 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         
         // Configuration
-        let configAPIItem = NSMenuItem(title: "Configure OpenAI API Key", action: #selector(configureAPIKey), keyEquivalent: "")
+        let configAPIItem = NSMenuItem(title: "Configure Gemini API Key", action: #selector(configureAPIKey), keyEquivalent: "")
         configAPIItem.target = self
         menu.addItem(configAPIItem)
         
@@ -422,7 +445,6 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     @objc private func processSelectedText() {
         print("🎯 Processing selected text...")
         
-        // Check if API key is configured
         guard let apiKey = aiService.getAPIKey(), !apiKey.isEmpty else {
             print("❌ API key not configured")
             showNotification(message: "❌ API key not configured")
@@ -499,9 +521,8 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     @objc private func improveClipboardText() {
         print("📋 Improving clipboard text...")
         
-        // Check if API key is configured
         guard let apiKey = aiService.getAPIKey(), !apiKey.isEmpty else {
-            showAlert(title: "API Key Required", message: "Please configure your OpenAI API key first.")
+            showAlert(title: "API Key Required", message: "Please configure your Gemini API key first.")
             return
         }
         
@@ -558,11 +579,12 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     }
     
     @objc private func configureAPIKey() {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Configure OpenAI API Key"
-        alert.informativeText = "Enter your OpenAI API key:"
+        alert.messageText = "Configure Gemini API Key"
+        alert.informativeText = "Enter your Gemini API key:"
         
-        let textField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         textField.stringValue = aiService.getAPIKey() ?? ""
         alert.accessoryView = textField
         
@@ -581,6 +603,7 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     }
     
     @objc private func configureSystemPrompt() {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Configure AI Instructions"
         alert.informativeText = "Customize how the AI processes your text:"
@@ -623,6 +646,7 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     }
     
     private func showAlert(title: String, message: String) {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
@@ -632,9 +656,16 @@ class ProperTypeMenuApp: NSObject, NSApplicationDelegate {
     
     private func showNotification(message: String) {
         print("🔔 \(message)")
-        
-        // Simple notification - we'll just print for now since NSUserNotification is deprecated
-        // In a real app, you'd use UserNotifications framework
+
+        if message.contains("Processing") || message.contains("Improving") {
+            setStatusIcon("arrow.trianglehead.2.clockwise")
+        } else if message.hasPrefix("✅") {
+            flashStatus("checkmark.circle", duration: 2.0)
+            NSSound(named: .init("Glass"))?.play()
+        } else if message.hasPrefix("❌") || message.hasPrefix("⚠️") {
+            flashStatus("exclamationmark.triangle", duration: 3.0)
+            NSSound(named: .init("Basso"))?.play()
+        }
     }
 }
 
@@ -645,6 +676,18 @@ app.delegate = delegate
 
 // Hide dock icon since this is a menu bar app
 app.setActivationPolicy(.accessory)
+
+// Add Edit menu so Cmd+V/C/X/A work in text fields
+let mainMenu = NSMenu()
+let editMenuItem = NSMenuItem()
+let editMenu = NSMenu(title: "Edit")
+editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+editMenuItem.submenu = editMenu
+mainMenu.addItem(editMenuItem)
+app.mainMenu = mainMenu
 
 print("🚀 Starting ProperType Enhanced...")
 app.run()
